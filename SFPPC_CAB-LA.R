@@ -7,8 +7,8 @@
 #                                               #
 #################################################
 
-# CODE DESCRIPTION: This code reads in cabotegravir injection data to examine
-# injection schedule adherence in clinics in San Francisco, CA.
+# CODE DESCRIPTION: This code reads in cabotegravir long-acting injection data 
+# to examine injection schedule adherence in clinics in San Francisco, CA.
 #
 # 1. DATA CLEANING:
 # Create new variables for on-time CAB injections and duration on CAB.
@@ -16,8 +16,12 @@
 # 2. DEMOGRAPHICS:
 # Age, race, ethnicity, and gender of participants. 
 # 
-# 3. RETENTION ON CAB AND ON-TIME INJECTIONS:
-# Survival curve and cox regression for predictors of retention.
+# 3. RETENTION ON CAB:
+# Fit survival curve to examine retention on CAB-LA; examine retention via
+# Cox regression.
+#
+# 4. LATE INJECTIONS:
+# Examine predictors of late injections in logistic mixed effects model. 
 
 
 # Libraries
@@ -201,7 +205,8 @@ dat %>%
          substanceUseAny = case_when(stimUse == 1 | opiateUse == 1 | alcoholUseDis == 1 ~ 1,
                                      .default = 0)) -> dat
 
-# Add in CAB injection dates from Chart Review records, some injection dates were not entered in Epic but were in Chart notes
+# Add in CAB injection dates from Chart Review records, some injection dates 
+# were not entered in Epic but were in Chart notes
 dat %>%
   group_by(PatientName) %>%
   arrange(date) %>%
@@ -228,7 +233,8 @@ dat %>%
 
 dat <- merge(dat, temp, by = 'MRN', all = T)
 
-# For participants who had one injection, they had 35 days on PrEP, those with 2 injections had 63 days on PrEP
+# For participants who had one injection, they had 35 days on PrEP, those with 
+# 2 injections had 63 days on PrEP
 # Save new dataset (datSurv) with one row per participant
 dat %>%
   rename(censorStatus = discontinued) %>%
@@ -242,52 +248,27 @@ dat %>%
 #### 2. DEMOGRAPHICS ####
 table1(~ `Age (Current)` + factor(`Gender Identity`) + factor(`Patient Ethnicity`) +
          factor(race) + factor(housing) + factor(stimUse) + factor(opiateUse) + 
-         factor(mentalHealthDx) +
-         factor(alcoholUseDis) + factor(site) + factor(`Hospital Location`), data = datSurv)
-
-# Either stimulant use, opioid use, or AUD
-datSurv %>%
-  mutate(substanceUseAny = case_when(stimUse == 1 | opiateUse == 1 | alcoholUseDis == 1 ~ 1,
-         .default = 0)) %>%
-  group_by(substanceUseAny) %>%
-  summarise(n = n(),
-            percent = n()/111*100)
-
-# Substance use composite
-describe(datSurv$substanceSum)
-IQR(datSurv$substanceSum, na.rm = T)
+         factor(mentalHealthDx) +  factor(substanceUseAny) + factor(substanceSum) +
+         factor(oralPrep) + 
+         factor(site) + factor(`Hospital Location`), data = datSurv)
 
 # Mental health
-table(datSurv$dx_anxiety) # n = 10
-table(datSurv$dx_depression) # n = 28
-table(datSurv$dx_bipolar) # n = 10
-table(datSurv$dx_ocd) # n = 1
-table(datSurv$dx_personality) # borderline personality, n = 1
-table(datSurv$dx_schizoPsychotic) # n = 7
-table(datSurv$dx_ptsd) # n = 11
-table(datSurv$mentalHealthDx)
+data.frame(Diagnosis = c("Anxiety", "Depression", "Bipolar Disorder", "OCD", "Borderline Personality", "Schizophrenia/Psychotic", "PTSD", "Any Mental Health Dx"),
+           Count = c(
+             table(datSurv$dx_anxiety)[["Anxiety"]],
+             table(datSurv$dx_depression)[["Depression"]],
+             table(datSurv$dx_bipolar)[["BipolarDisorder"]],
+             table(datSurv$dx_ocd)[["OCD"]],
+             table(datSurv$dx_personality)[["PersonalityDisorder"]],
+             table(datSurv$dx_schizoPsychotic)[["Schizophrenia/Psychotic"]],
+             table(datSurv$dx_ptsd)[["PTSD"]],
+             sum(table(datSurv$mentalHealthDx))))
 
 # Number of on-time injections
 table(dat$cab_lateInj)
 
-# Initiating PrEP for the first time
-datSurv %>%
-  group_by(oralPrepHistory) %>%
-  summarise(n = n(),
-            percent = n()/111*100)
-
-# Oral PrEP at CAB initiation
-datSurv %>%
-  group_by(oralPrepAtInitiation) %>%
-  summarise(n = n(),
-            percent = n()/111*100)
-
-# Oral PrEP history
-datSurv %>%
-  group_by(oralPrep) %>%
-  summarise(n = n(),
-            percent = n()/111*100)
-
+# Range of injection data
+range(dat$`Administration Date & Time`)
 
 # Demographics bar plots
 # Bar plot for oralPrep
@@ -304,38 +285,23 @@ p2 <- create_percent_barplot(datSurv, "mentalHealthDx", "#b8d1ae",
 p3 <- create_percent_barplot(datSurv, "substanceUseAny", "#ffd6b9", 
                              "Percentage of Any Substance Use", 
                              "Substance Use (Any)")
+
+# Bar plot for housing
+p4 <- create_percent_barplot(datSurv, "housing", "#dbbeff", 
+                             "Percentage of housing instability", 
+                             "Housing instability")
 # Save demographics bar plots
 create_pptx(p1)
 create_pptx(p2)
 create_pptx(p3)
+create_pptx(p4)
 
 
 #### 3. RETENTION ON CAB #### 
 # Create survival object [Surv(dats, censorStatus) ~ 1] and fit kaplan-meier curve
 km <- survfit(Surv(days, censorStatus) ~ 1, data = datSurv)
 
-survfit2(Surv(days, censorStatus) ~ 1, data = datSurv) %>% 
-  ggsurvfit() +
-  labs(
-    x = "Days",
-    y = "Overall survival probability"
-  ) + 
-  add_confidence_interval(fill = 'blue') +
-  add_risktable() +
-  ylim(0, 1) +
-  scale_x_continuous(limits = c(0, 550), breaks = c(0, 90, 180, 270, 360, 450, 540))
- 
-
-kmPlot <- ggsurvfit(km) +
-  labs(
-    x = "Days",
-    y = "Overall survival probability"
-  ) + 
-  add_confidence_interval() +
-  add_risktable() +
-  ylim(0, 1) +
-  scale_x_continuous(limits = c(0, 550), breaks = c(0, 90, 180, 270, 360, 450, 540))
-
+# Create km plot
 kmPlot <- ggsurvfit(km) +
   labs(
     x = "Days",
@@ -363,9 +329,6 @@ pptx_doc <- ph_with(pptx_doc, dml(ggobj = kmPlot), location = ph_location_fullsi
 # Save the PowerPoint document
 print(pptx_doc, target = "KaplanMeierPlot.pptx")
 
-# Duration on cab
-summary(survfit(Surv(days, censorStatus) ~ 1, data = datSurv))
-
 # Print the median survival time from raw data
 datSurv %>%
   filter(censorStatus == 0) %>%
@@ -380,121 +343,22 @@ datSurv %>%
   group_by(censorStatus) %>%
   summarise(n = n())
 
-
-# Predictors of late CAB injections
-# Set reference level
-dat$race_refW = relevel(factor(dat$race), ref = 'White')
-dat$gender_refM = relevel(factor(dat$gender), ref = 'Male')
-
-# Fit glmer model for late cabotegravir injections
-fit1 <- glmer(cab_lateInj ~ `Age (At Administration)` + gender_refM + race_refW + 
-                housing + substanceSum + mentalHealthDx + oralPrep + (1|MRN),
-              family = binomial(link = "logit"),
-              data = dat,
-              glmerControl(optimizer = "bobyqa"))
-
-summary(fit1)
-
-# Formatted table for predictors of late CAB injections
-fit1 %>%
-  tbl_regression(exp = T) 
-
-# Figure for OR
-# Extract model summary
-model_summary <- tidy(fit1, conf.int = TRUE, effects = "fixed") # Use broom.mixed
-
-# Filter out the intercept (if you don't want it in the plot)
-model_summary <- model_summary %>%
-  filter(term != "(Intercept)")
-
-# Calculate odds ratios and confidence intervals
-model_summary <- model_summary %>%
-  mutate(estimate = exp(estimate),  # Convert log-odds to odds ratios
-         conf.low = exp(conf.low),  # Lower CI
-         conf.high = exp(conf.high), # Upper CI
-         yAxis = rev(1:n())) %>%  # Reverse order for plotting
-  mutate(name = case_when(term == '`Age (At Administration)`' ~ 'Age',
-                          term == 'gender_refMFemale' ~ 'Cisgender female (v. Male)',
-                          term == 'gender_refMOther' ~ 'Other gender (v. Male)',
-                          term == 'gender_refMTransgenderFemale' ~ 'Transgender female (v. Male)',
-                          term == 'race_refWAsian/PacIs' ~ 'Asian (v. White)',
-                          term == 'race_refWBlack' ~ 'Black (v. White)',
-                          term == 'race_refWOther' ~ 'Other race (v. White)',
-                          term == 'housingunstable' ~ 'Unstable (v. Stable)',
-                          term == 'substanceSum' ~ 'Substance use',
-                          term == 'mentalHealthDx' ~ 'Mental health diagnosis',
-                          term == 'oralPreporal PrEP lead-in' ~ 'Oral PrEP lead-in (v. no PrEP)',
-                          term == 'oralPrepprior PrEP, not current' ~ 'Prior but not current PrEP (v. no PrEP)'),
-         yAxis = 13-row_number())
-
-# Define the desired order for the y-axis
-desired_order <- c("Age",
-                   "Cisgender female (v. Male)",
-                   "Transgender female (v. Male)",
-                   "Other gender (v. Male)",
-                   "Asian (v. White)",
-                   "Black (v. White)",
-                   "Other race (v. White)",
-                   "Unstable (v. Stable)",
-                   "Substance use",
-                   "Mental health diagnosis",
-                   "Prior but not current PrEP (v. no PrEP)",
-                   "Oral PrEP lead-in (v. no PrEP)")
-
-# Set the factor levels for 'name' based on the desired order
-model_summary <- model_summary %>%
-  mutate(name = factor(name, levels = desired_order))
-
-# Plot the OR and CI using ggplot2
-fit1_plot <- ggplot(model_summary, aes(x = estimate, y = reorder(name, yAxis))) +
-  geom_vline(aes(xintercept = 1), size = 0.25, linetype = "dashed") + # Reference line at OR = 1
-  geom_errorbarh(aes(xmax = conf.high, xmin = conf.low), size = 0.5, height = 0.2, color = "gray50") + # Error bars
-  geom_point(size = 3.5, color = "orange") + # Points for OR
-  geom_text(aes(label = sprintf("%.2f", estimate)), hjust = -0.2, size = 3.5) + # Add OR labels next to points
-  theme_bw() + # Clean theme
-  theme(panel.grid.minor = element_blank()) + # Remove minor grid lines
-  scale_x_continuous(breaks = seq(0.5, 2, 0.5)) + # Customize x-axis breaks
-  coord_trans(x = "log10") + # Log scale for x-axis
-  ylab("") + # Empty y-axis label
-  xlab("Odds Ratio (log scale)") + # X-axis label
-  ggtitle("Odds Ratios and Confidence Intervals from Model")
-
-# Convert the ggsurvfit plot to a ggplot object to ensure compatibility
-fit1_plot <- as.ggplot(fit1_plot)
-
-# Save
-create_pptx(fit1_plot)
-
-
-# Include clinic as a fixed effect too, removed housing, removed substance
-fit2 <- glmer(cab_lateInj ~ `Age (At Administration)` + gender_refM + race_refW + 
-                housing + substanceSum + mentalHealthDx + oralPrep + ward86other + (1|MRN),
-              family = binomial(link = "logit"),
-              data = dat,
-              glmerControl(optimizer = "bobyqa"))
-
-summary(fit2)
-
-# Formatted table for predictors of late CAB injections
-fit2 %>%
-  tbl_regression(exp = T) 
-
-
 # Predictors of CAB discontinuation (Cox regression)
 # Set reference level
-datSurv$race_refW = relevel(factor(datSurv$race), ref = 'White')
-datSurv$gender_refM = relevel(factor(datSurv$gender), ref = 'Male')
+datSurv %>%
+  mutate(race_refW = relevel(factor(race), ref = 'White'),
+         gender_refM = relevel(factor(gender), ref = 'Male')) -> datSurv
 
-fit2 <- coxph(Surv(days, censorStatus) ~ `Age (Current)` + gender_refM + race_refW +
+fit1_dis <- coxph(Surv(days, censorStatus) ~ `Age (Current)` + gender_refM + race_refW +
                 housing + substanceSum + mentalHealthDx + oralPrep + site, data = datSurv)
 
 # Formatted table for predictors of late CAB injections
-fit2 %>%
+fit1_dis %>%
   tbl_regression(exp = T) 
 
 # Figure for OR
 # Extract model summary
-model_summary <- tidy(fit2, conf.int = TRUE, effects = "fixed") # Use broom.mixed
+model_summary <- tidy(fit1_dis, conf.int = TRUE, effects = "fixed") # Use broom.mixed
 
 # Filter out the intercept (if you don't want it in the plot)
 model_summary <- model_summary %>%
@@ -513,7 +377,7 @@ model_summary <- model_summary %>%
                           term == 'race_refWAsian/PacIs' ~ 'Asian (v. White)',
                           term == 'race_refWBlack' ~ 'Black (v. White)',
                           term == 'race_refWOther' ~ 'Other race (v. White)',
-                          term == 'housingunstable' ~ 'Unstable (v. Stable)',
+                          term == 'housingunstable' ~ 'Housing unstable (v. Stable)',
                           term == 'substanceSum' ~ 'Substance use',
                           term == 'mentalHealthDx' ~ 'Mental health diagnosis',
                           term == 'oralPreporal PrEP lead-in' ~ 'Oral PrEP lead-in (v. no PrEP)',
@@ -531,7 +395,7 @@ desired_order <- c("Age",
                    "Asian (v. White)",
                    "Black (v. White)",
                    "Other race (v. White)",
-                   "Unstable (v. Stable)",
+                   "Housing unstable (v. Stable)",
                    "Substance use",
                    "Mental health diagnosis",
                    "Prior but not current PrEP (v. no PrEP)",
@@ -544,8 +408,14 @@ desired_order <- c("Age",
 model_summary <- model_summary %>%
   mutate(name = factor(name, levels = desired_order))
 
+# Filter to show fewer variables
+model_summary %>%
+  filter(name == 'Age' | name == 'Housing unstable (v. Stable)' | name == 'Substance use' |
+           name == 'Mental health diagnosis' | name == 'Oral PrEP lead-in (v. no PrEP)' |
+           name == 'Prior but not current PrEP (v. no PrEP)') -> model_summary_short
+
 # Plot the OR and CI using ggplot2
-fit2_plot <- ggplot(model_summary, aes(x = estimate, y = reorder(name, yAxis))) +
+fit1_dis_plot <- ggplot(model_summary_short, aes(x = estimate, y = reorder(name, yAxis))) +
   geom_vline(aes(xintercept = 1), size = 0.25, linetype = "dashed") + # Reference line at OR = 1
   geom_errorbarh(aes(xmax = conf.high, xmin = conf.low), size = 0.5, height = 0.2, color = "gray50") + # Error bars
   geom_point(size = 3.5, color = "orange") + # Points for OR
@@ -553,16 +423,106 @@ fit2_plot <- ggplot(model_summary, aes(x = estimate, y = reorder(name, yAxis))) 
   theme_bw() + # Clean theme
   theme(panel.grid.minor = element_blank()) + # Remove minor grid lines
   scale_x_continuous(breaks = seq(0.5, 2, 0.5)) + # Customize x-axis breaks
-  xlim()
   coord_trans(x = "log10") + # Log scale for x-axis
   ylab("") + # Empty y-axis label
   xlab("Odds Ratio (log scale)") + # X-axis label
   ggtitle("Odds Ratios and Confidence Intervals from Model")
 
 # Convert the ggsurvfit plot to a ggplot object to ensure compatibility
-fit2_plot <- as.ggplot(fit2_plot)
+fit1_dis_plot <- as.ggplot(fit1_dis_plot)
 
 # Save
-create_pptx(fit2_plot)
+create_pptx(fit1_dis__plot)
 
 
+#### 4. LATE INJECTIONS ####
+# Predictors of late CAB injections
+# Set reference level
+dat %>%
+  mutate(race_refW = relevel(factor(race), ref = 'White'),
+         gender_refM = relevel(factor(gender), ref = 'Male')) -> dat
+
+# Fit glmer model for late cabotegravir injections
+fit2_late <- glmer(cab_lateInj ~ `Age (At Administration)` + gender_refM + race_refW + 
+                housing + substanceSum + mentalHealthDx + oralPrep + (1|MRN),
+              family = binomial(link = "logit"),
+              data = dat,
+              glmerControl(optimizer = "bobyqa"))
+
+summary(fit2_late)
+
+# Formatted table for predictors of late CAB injections
+fit2_late %>%
+  tbl_regression(exp = T) 
+
+# Figure for OR
+# Extract model summary
+model_summary <- tidy(fit2_late, conf.int = TRUE, effects = "fixed") # Use broom.mixed
+
+# Filter out the intercept (if you don't want it in the plot)
+model_summary <- model_summary %>%
+  filter(term != "(Intercept)")
+
+# Calculate odds ratios and confidence intervals
+model_summary <- model_summary %>%
+  mutate(estimate = exp(estimate),  # Convert log-odds to odds ratios
+         conf.low = exp(conf.low),  # Lower CI
+         conf.high = exp(conf.high), # Upper CI
+         yAxis = rev(1:n())) %>%  # Reverse order for plotting
+  mutate(name = case_when(term == '`Age (At Administration)`' ~ 'Age',
+                          term == 'gender_refMFemale' ~ 'Cisgender female (v. Male)',
+                          term == 'gender_refMOther' ~ 'Other gender (v. Male)',
+                          term == 'gender_refMTransgenderFemale' ~ 'Transgender female (v. Male)',
+                          term == 'race_refWAsian/PacIs' ~ 'Asian (v. White)',
+                          term == 'race_refWBlack' ~ 'Black (v. White)',
+                          term == 'race_refWOther' ~ 'Other race (v. White)',
+                          term == 'housingunstable' ~ 'Housing unstable (v. Stable)',
+                          term == 'substanceSum' ~ 'Substance use',
+                          term == 'mentalHealthDx' ~ 'Mental health diagnosis',
+                          term == 'oralPreporal PrEP lead-in' ~ 'Oral PrEP lead-in (v. no PrEP)',
+                          term == 'oralPrepprior PrEP, not current' ~ 'Prior but not current PrEP (v. no PrEP)'),
+         yAxis = 13-row_number())
+
+# Define the desired order for the y-axis
+desired_order <- c("Age",
+                   "Cisgender female (v. Male)",
+                   "Transgender female (v. Male)",
+                   "Other gender (v. Male)",
+                   "Asian (v. White)",
+                   "Black (v. White)",
+                   "Other race (v. White)",
+                   "Housing unstable (v. Stable)",
+                   "Substance use",
+                   "Mental health diagnosis",
+                   "Prior but not current PrEP (v. no PrEP)",
+                   "Oral PrEP lead-in (v. no PrEP)")
+
+# Set the factor levels for 'name' based on the desired order
+model_summary <- model_summary %>%
+  mutate(name = factor(name, levels = desired_order))
+
+# Filtered variables for plot
+model_summary %>%
+  filter(name == 'Age' | name == 'Substance use' | name == 'Mental health diagnosis' |
+           name == 'Prior but not current PrEP (v. no PrEP)' |
+           name == 'Oral PrEP lead-in (v. no PrEP)' | name == 'Housing unstable (v. Stable)') -> model_summary_short
+
+# Plot the OR and CI using ggplot2
+fit2_late_plot <- ggplot(model_summary_short, aes(x = estimate, y = reorder(name, yAxis))) +
+  geom_vline(aes(xintercept = 1), size = 0.25, linetype = "dashed") + # Reference line at OR = 1
+  geom_errorbarh(aes(xmax = conf.high, xmin = conf.low), size = 0.5, height = 0.2, color = "gray50") + # Error bars
+  geom_point(size = 3.5, color = "orange") + # Points for OR
+  geom_text(aes(label = sprintf("%.2f", estimate)), hjust = -0.2, size = 3.5) + # Add OR labels next to points
+  theme_bw() + # Clean theme
+  theme(panel.grid.minor = element_blank()) + # Remove minor grid lines
+  scale_x_continuous(breaks = seq(0.5, 2, 0.5)) + # Customize x-axis breaks
+  coord_trans(x = "log10") + # Log scale for x-axis
+  ylab("") + # Empty y-axis label
+  xlab("Odds Ratio (log scale)") + # X-axis label
+  ggtitle("Odds Ratios and Confidence Intervals from Model")
+
+# Convert the ggsurvfit plot to a ggplot object to ensure compatibility
+fit2_late_plot <- as.ggplot(fit2_late_plot)
+
+# Save
+create_pptx(fit2_late_plot)
